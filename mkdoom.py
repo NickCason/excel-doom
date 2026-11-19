@@ -31,6 +31,32 @@ Private Sub Worksheet_SelectionChange(ByVal Target As Range)
 End Sub
 '''
 
+# Operating-system calls. Each is known only on the platform whose branch declares it.
+OS_CALLS = set('''cgeventsourcekeystate cgeventsourcebuttonstate cgeventcreate cgeventgetlocation cfrelease cgwarpmousecursorposition
+cgassociatemouseandmousecursorposition cgmaindisplayid cgdisplaypixelswide cgdisplaypixelshigh mach_absolute_time getfrontprocess
+getcurrentprocess sameprocess cgeventsourcecounterforeventtype getasynckeystate getforegroundwindow queryperformancecounter
+queryperformancefrequency getcursorpos setcursorpos getsystemmetrics playsoundmem playsoundstop'''.split())
+
+def platform_source(src, mac):
+    """The module as VBA compiles it on one platform: #If Mac Then / #Else / #End If resolved.
+    Dropped lines become empty, so line numbers stay the same."""
+    out, state = [], None
+    for line in src.split('\n'):
+        s = line.strip()
+        if s == '#If Mac Then':
+            assert state is None, 'nested #If'
+            state = 'if'; out.append(''); continue
+        if s == '#Else':
+            assert state == 'if', '#Else without #If'
+            state = 'else'; out.append(''); continue
+        if s == '#End If':
+            assert state, '#End If without #If'
+            state = None; out.append(''); continue
+        assert not s.startswith('#'), 'unknown directive: ' + s
+        out.append(line if state is None or (state == 'if') == mac else '')
+    assert state is None, 'unclosed #If'
+    return '\n'.join(out)
+
 BOOK_CODE = '''Private Sub Workbook_Open()
     Splash
 End Sub
@@ -107,14 +133,25 @@ def build(out='out/doom.xlsm', wasm_path='work/doomxl.wasm'):
         host = host.replace('@@%s@@' % name, str(value))
     host = host.replace("    '@@BANNERROWS@@", rows)
     mods += [('Rt', rtvba.RT), ('RtF', rtvba.RTF), ('Wasi', rtvba.WASI), ('Tele', televba.TELE), ('Host', host)]
-    host_src = re.sub(r'(?m)^#.*$', '', hostvba.HOST)
-    host_src = re.sub(r'(?m)^Private Declare .*$', '', host_src)
-    host_src = re.sub(r'(?s)Private Type \w+.*?End Type', '', host_src)
-    host_src = re.sub(r'(?m)^Private Const (\w+)', r'Private \1', host_src)
-    pr = [p for p in vbalint.lint([(n, s) for n, s in mods if n != 'Host'] + [('Host', host_src)])
-          if p[0] in ('Host', 'Tele') and p[3].lower() not in OM]
-    if pr:
-        for p in pr[:12]: print('LINT', p)
+    # Lint the hand-written modules once as Excel for Mac will compile them and once as Excel for
+    # Windows will, so that a name used in one platform's branch must be declared in that branch.
+    bad = False
+    for mac in (True, False):
+        engine = [(n, s) for n, s in mods if n not in ('Host', 'Tele')]
+        hand, apis = [], set()
+        for n, s in mods:
+            if n in ('Host', 'Tele'):
+                s = platform_source(s, mac)
+                apis |= {a.lower() for a in re.findall(r'(?m)^Private Declare PtrSafe (?:Function|Sub) (\w+)', s)}
+                s = re.sub(r'(?m)^Private Declare .*$', '', s)
+                s = re.sub(r'(?s)Private Type \w+.*?End Type', '', s)
+                s = re.sub(r'(?m)^Private Const (\w+)', r'Private \1', s)
+                hand.append((n, s))
+        known = (OM - OS_CALLS) | apis
+        pr = [p for p in vbalint.lint(engine + hand) if p[0] in ('Host', 'Tele') and p[3].lower() not in known]
+        for p in pr[:12]: print('LINT (%s)' % ('Mac' if mac else 'Windows'), p)
+        bad = bad or bool(pr)
+    if bad:
         raise SystemExit(1)
     longest = max(len(l) for _, s in mods for l in s.split('\n'))
     sheet, styles, pictures, extra_base = wad_sheet()
