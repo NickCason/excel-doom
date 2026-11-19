@@ -35,6 +35,7 @@ Private Declare PtrSafe Function SetCursorPos Lib "user32" (ByVal x As Long, ByV
 Private Declare PtrSafe Function GetSystemMetrics Lib "user32" (ByVal n As Long) As Long
 Private Declare PtrSafe Function PlaySoundMem Lib "winmm" Alias "PlaySoundA" (ByRef snd As Byte, ByVal hmod As LongPtr, ByVal flags As Long) As Long
 Private Declare PtrSafe Function PlaySoundStop Lib "winmm" Alias "PlaySoundA" (ByVal snd As LongPtr, ByVal hmod As LongPtr, ByVal flags As Long) As Long
+Private Declare PtrSafe Function SysParam Lib "user32" Alias "SystemParametersInfoA" (ByVal what As Long, ByVal n As Long, ByRef p As Long, ByVal keep As Long) As Long
 #End If
 
 Private Const PW As Long = 320
@@ -100,6 +101,7 @@ Private SndMute As Boolean, Cheats As Long, RunCount As Long
 Private LastBuf As Long, LastPal As Long, SelR As Long, SelC As Long
 Private TolLo As Long, TolHi As Long, TolSettle As Long
 Private ViewA As Long, ViewX As Long, ViewY As Long, ViewStill As Long, PalSeen As Long
+Private AccOff As Boolean, AccSticky As Long, AccFilter As Long
 
 ' ---------------------------------------------------------------- telemetry clock
 ' Timer only ticks 64 times a second on Mac; this counts in nanoseconds. Used for measurement only.
@@ -552,6 +554,58 @@ Private Sub HookKeys(ByVal hook As Boolean)
     Next j
 #End If
     On Error GoTo 0
+End Sub
+
+' Shift is the run key, and Windows listens to it: five quick taps offer Sticky Keys, eight
+' seconds on the right-hand one offer Filter Keys, each with a prompt over the game. For the
+' length of a game the two shortcuts are switched off, then put back as they were.
+'  - Someone who has either feature turned on needs it: then that one is not touched.
+'  - Only the "shortcut" bits change, for this Windows session; nothing is written to the profile.
+'  - Putting back reads the settings again and sets only the bits taken out, so a change made in
+'    Settings during the game survives.
+Private Sub AccessKeys(ByVal off As Boolean)
+#If Mac Then
+#Else
+    Dim b(0 To 5) As Long
+    On Error Resume Next
+    If off Then
+        If AccOff Then Exit Sub
+        AccSticky = 0: AccFilter = 0: AccOff = True
+        b(0) = 8: b(1) = 0
+        If SysParam(&H3A, 8, b(0), 0) <> 0 Then
+            If (b(1) And 1) = 0 And (b(1) And 4) <> 0 Then
+                AccSticky = b(1) And 12
+                b(1) = b(1) - AccSticky
+                If SysParam(&H3B, 8, b(0), 0) = 0 Then AccSticky = 0
+            End If
+        End If
+        b(0) = 24: b(1) = 0
+        If SysParam(&H32, 24, b(0), 0) <> 0 Then
+            If (b(1) And 1) = 0 And (b(1) And 4) <> 0 Then
+                AccFilter = b(1) And 12
+                b(1) = b(1) - AccFilter
+                If SysParam(&H33, 24, b(0), 0) = 0 Then AccFilter = 0
+            End If
+        End If
+    ElseIf AccOff Then
+        AccOff = False
+        If AccSticky <> 0 Then
+            b(0) = 8: b(1) = 0
+            If SysParam(&H3A, 8, b(0), 0) <> 0 Then
+                b(1) = b(1) Or AccSticky
+                SysParam &H3B, 8, b(0), 0
+            End If
+        End If
+        If AccFilter <> 0 Then
+            b(0) = 24: b(1) = 0
+            If SysParam(&H32, 24, b(0), 0) <> 0 Then
+                b(1) = b(1) Or AccFilter
+                SysParam &H33, 24, b(0), 0
+            End If
+        End If
+    End If
+    On Error GoTo 0
+#End If
 End Sub
 
 ' ------------------------------------------------------------------ display
@@ -1032,6 +1086,7 @@ Private Function RunDoom(ByVal virtMode As Boolean, ByVal nticks As Long) As Str
     InitDisplay
     If Not Virt Then
         If (PresentMode And 2) = 0 Then HookKeys True
+        AccessKeys True
         Playing = True
     End If
     Application.StatusBar = "DOOM: starting..."
@@ -1094,6 +1149,7 @@ Cleanup:
     Playing = False
     Application.ScreenUpdating = True
     HookKeys False
+    AccessKeys False
     Application.StatusBar = False
     Application.EnableCancelKey = xlInterrupt
     If Not Virt And TeleToFile Then telefile = TeleSave(TeleText(HostTele() & "exit=" & msg & vbLf))
@@ -1110,6 +1166,7 @@ Cleanup:
     s = s & "|telefile=" & telefile
     s = s & "|batched=" & Batched & "|tolsum=" & TolSum & "|evt=" & EvtCount & "|front=" & FrontOK & "|warp=" & Format(WarpX, "0") & "," & Format(WarpY, "0")
     s = s & "|sndasked=" & SndAsked & "|sndplayed=" & SndPlayed & "|sndfailed=" & SndFailed & "|sndsamples=" & SndSamples & "|tsnd=" & Format(TSnd, "0.000")
+    s = s & "|accsticky=" & AccSticky & "|accfilter=" & AccFilter
     If Not Virt Then
         s = s & "|log="
         i = LogN - 400

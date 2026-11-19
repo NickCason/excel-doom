@@ -32,6 +32,10 @@ $o = powershell -NoProfile -ExecutionPolicy Bypass -File win\clicktest.ps1 2>&1
 Note 'first-time-player path, real clicks' ([bool]($o | Select-String -Pattern 'CLICK TEST PASSED')) (($o | Select-String -Pattern 'opened on').Line)
 Start-Sleep -Seconds 4
 
+$o = & $py win\stickytest.py 2>&1
+Note 'Sticky Keys shortcut off in a game, back after' ([bool]($o | Select-String -Pattern 'STICKY TEST PASSED')) ((($o | Select-String -Pattern '^during').Line -replace '\s+', ' ') -replace '^during ', 'during: ')
+Start-Sleep -Seconds 4
+
 & $py win\playtest.py Host.PlayRaw still | Out-Null
 $o = & $py tests\picture_check.py 2>&1
 $line = ($o | Select-String -Pattern 'engine frame vs real cells').Line

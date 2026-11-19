@@ -35,7 +35,7 @@ End Sub
 OS_CALLS = set('''cgeventsourcekeystate cgeventsourcebuttonstate cgeventcreate cgeventgetlocation cfrelease cgwarpmousecursorposition
 cgassociatemouseandmousecursorposition cgmaindisplayid cgdisplaypixelswide cgdisplaypixelshigh mach_absolute_time getfrontprocess
 getcurrentprocess sameprocess cgeventsourcecounterforeventtype getasynckeystate getforegroundwindow queryperformancecounter
-queryperformancefrequency getcursorpos setcursorpos getsystemmetrics playsoundmem playsoundstop'''.split())
+queryperformancefrequency getcursorpos setcursorpos getsystemmetrics playsoundmem playsoundstop sysparam'''.split())
 
 def platform_source(src, mac):
     """The module as VBA compiles it on one platform: #If Mac Then / #Else / #End If resolved.
