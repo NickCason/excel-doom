@@ -1,0 +1,2 @@
+# The engine build script is run by bash, also on Windows (Git Bash): never give it CRLF line ends.
+*.sh text eol=lf

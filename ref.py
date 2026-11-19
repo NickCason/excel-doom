@@ -23,6 +23,7 @@ def run(wasm='work/doomxl.wasm', nticks=40, warp=1, keys=None, fuel=False):
     linker.define_func('env', 'poll_key', FuncType([], [i32]), poll)
     linker.define_func('env', 'mouse_buttons', FuncType([], [i32]), lambda: 0)
     linker.define_func('env', 'mouse_dx', FuncType([], [i32]), lambda: 0)
+    linker.define_func('env', 'play_sound', FuncType([i32] * 5, [i32]), lambda pcm, n, rate, vol, sep: 0)
     inst = linker.instantiate(store, Module.from_file(engine, wasm))
     ex = inst.exports(store); st['mem'] = ex['memory']
     ex['_initialize'](store)
