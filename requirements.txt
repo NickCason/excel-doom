@@ -1,0 +1,6 @@
+# Building the workbook
+pillow
+# Optional: reference runs, offline verification and the Mac test drivers
+wasmtime
+numpy
+pyobjc-framework-Quartz; sys_platform == "darwin"

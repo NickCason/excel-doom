@@ -1,0 +1,9 @@
+.venv/
+out/
+build/
+__pycache__/
+*.pyc
+.DS_Store
+work/*
+!work/doomxl.wasm
+verify_result.txt
