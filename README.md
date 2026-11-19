@@ -76,6 +76,7 @@ Macros are the whole point here, so it is fair to ask what they touch.
 - After each game they tick the box on the checklist, write one line about the run next to it, and mark the workbook as saved so that closing it does not ask about the changed colours.
 - While a game is running they ask the operating system which keys and mouse buttons are down (CoreGraphics on Mac, `GetAsyncKeyState` on Windows), and only while Excel is the front application. Some antivirus tools dislike workbooks that declare those calls.
 - On Windows they play the game's sound effects through the system's own wave player (`PlaySound` in `winmm`), from memory.
+- On Windows they switch off two keyboard shortcuts while a game is running, and put them back when it ends: five taps of Shift (Sticky Keys) and eight seconds on the right Shift (Filter Keys). Shift is the run key, and either shortcut puts a prompt over the game. Nothing is written to your profile, and if you have Sticky Keys or Filter Keys turned on, that one is left alone. If Excel is closed by force in the middle of a game, the shortcuts stay off until you sign out of Windows or turn them back on in Settings › Accessibility › Keyboard.
 - They do not use the network and do not write files. The optional macro `PlayDoomWithStats`, and the macros the test drivers use, write one performance report to a text file in your home folder.
 
 All of the VBA is generated from the sources in this repository.
@@ -131,7 +132,7 @@ To rebuild the engine itself install [zig](https://ziglang.org/) and run `./buil
 
 ## Checking a build
 
-**Windows.** One command runs everything: the build, the engine self-check inside Excel, the offline emulator, a scripted game with twelve key combinations, the first-time-player path with real mouse clicks, and a comparison of the cells with the engine's own frame.
+**Windows.** One command runs everything: the build, the engine self-check inside Excel, the offline emulator, a scripted game with twelve key combinations, the first-time-player path with real mouse clicks, the Sticky Keys shortcut during and after a game, and a comparison of the cells with the engine's own frame.
 
 ```
 powershell -ExecutionPolicy Bypass -File win\check.ps1
@@ -158,7 +159,7 @@ It takes the keyboard and mouse for about four minutes, so leave the PC alone wh
 | `mkxlsm.py`, `mkdoom.py` | Workbook writer and build script |
 | `vbalint.py`, `vbaemu.py`, `emu_run.py`, `ref.py` | Lint, offline VBA emulator and reference comparison |
 | `win/check.ps1` | Every Windows check in one go |
-| `win/verify.ps1`, `win/playtest.py`, `win/clicktest.ps1` | Windows test drivers: self-check, scripted play with injected keys, first-time-player path with real mouse clicks |
+| `win/verify.ps1`, `win/playtest.py`, `win/clicktest.ps1`, `win/stickytest.py` | Windows test drivers: self-check, scripted play with injected keys, first-time-player path with real mouse clicks, Sticky Keys shortcut off during a game |
 | `tests/check_verify.py`, `tests/picture_check.py` | Compare the self-check's checksums, and the cells with the engine's frame |
 | `xl.py`, `playtest.py`, `latency.py`, `freezetest.py`, `turntest.py`, `clicktest.py` | Mac test drivers (AppleScript and injected input) |
 | `experiments/` | Earlier measurements and prototypes, kept for the record; not maintained |

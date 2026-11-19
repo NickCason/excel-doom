@@ -152,4 +152,17 @@ Keys the host handles itself rather than passing to the engine: V (sound), 8, 9 
 
 `win\clicktest.ps1` opens the workbook, clicks the splash with a real mouse click, fires, quits, presses arrow keys over the picture, clicks the picture to play again, starts a third game from the checklist's box and reads the checklist row back.
 
+## Sticky Keys
+
+Shift is the run key, and Windows listens to it: five quick taps offer Sticky Keys, and eight seconds on the right-hand Shift offer Filter Keys. Either puts a prompt over the game and takes the keyboard.
+
+`AccessKeys` switches both shortcuts off when a game starts and puts them back when it ends, with `SystemParametersInfo` (`SPI_SETSTICKYKEYS`, `SPI_SETFILTERKEYS`). The rules it follows:
+
+- If the feature itself is turned on, the player needs it, and that one is not touched.
+- Only the two shortcut bits change, and only for the Windows session; nothing is written to the profile.
+- Putting back reads the settings again and sets only the bits that were taken out, so a change made in Settings during the game survives.
+- It runs in the same clean-up as the key hooks, so an error or Esc path restores it too. If Excel is killed mid-game, the shortcuts stay off until sign-out.
+
+`win\stickytest.py` reads the two settings before, during and after a short game. On this PC: shortcut active before, off during, the same value as before afterwards (510 and 126). Injected Shift taps do not raise the prompt, on the old build or the new one, so the prompt itself is not covered by a test: only a person tapping Shift can show that.
+
 Not yet done: a session played by a person, mouse look, and any second machine or Excel version. The automated tests open the workbook through automation, where macros are already allowed; nobody has yet opened it by double-clicking and pressed Enable Content.
