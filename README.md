@@ -11,7 +11,7 @@ The real DOOM engine running inside a single Excel workbook. Every cell is a pix
 | Platform | State |
 |---|---|
 | Excel for Mac 16.x, Apple Silicon | Works. About 35 fps standing still, about 10–12 fps while moving. |
-| Excel for Windows, 64-bit | **Untested.** The Windows code paths are written but have never been run. See [docs/WINDOWS.md](docs/WINDOWS.md). |
+| Excel for Windows, 64-bit | Runs, lightly tested on one machine. The engine self-check passes. About 45 fps standing still, about 10 fps while moving. Keyboard only. See [docs/WINDOWS.md](docs/WINDOWS.md). |
 | 32-bit Excel, Excel Online, Numbers, LibreOffice | Not supported. |
 
 This is an experiment, not a product. No sound. No saving. It starts directly on E1M1.

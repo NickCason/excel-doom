@@ -44,6 +44,7 @@ Private Const FH As Long = 202
 Private Const WADC As Long = 701
 Private Const WADR As Long = 301
 Private Const BATCHMIN As Long = 1800
+Private Const BATCHWIN As Long = 100
 Private Const MSENS As Double = 6#
 
 Private Const BUILD_ID As String = "@@BUILD@@"
@@ -215,7 +216,12 @@ Private Sub InitKeys()
     AddKey 126, &H26, &HAD, "up": AddKey 125, &H28, &HAF, "down": AddKey 123, &H25, &HAC, "left": AddKey 124, &H27, &HAE, "right"
     AddKey 13, &H57, &HAD, "w": AddKey 1, &H53, &HAF, "s": AddKey 0, &H41, &HA0, "a": AddKey 2, &H44, &HA1, "d"
     AddKey 59, &H11, &HA3, "ctrl": AddKey 49, &H20, &HA2, "space": AddKey 14, &H45, &HA2, "e"
-    AddKey 56, &H10, &HB6, "shift": AddKey 58, &H12, &HB8, "option"
+    AddKey 56, &H10, &HB6, "shift"
+#If Mac Then
+    AddKey 58, &H12, &HB8, "option"
+#Else
+    ' no Alt on Windows: it puts the ribbon into KeyTips mode, and the next game keys then drive the ribbon
+#End If
     AddKey 36, &HD, 13, "enter": AddKey 53, &H1B, 27, "esc": AddKey 48, &H9, 9, "tab"
     AddKey 16, &H59, 121, "y": AddKey 45, &H4E, 110, "n"
     AddKey 18, &H31, 49, "1": AddKey 19, &H32, 50, "2": AddKey 20, &H33, 51, "3": AddKey 21, &H34, 52, "4"
@@ -372,6 +378,10 @@ End Sub
 
 Private Sub HookKeys(ByVal hook As Boolean)
     Dim ks As Variant, i As Long
+#If Mac Then
+#Else
+    Dim ms As Variant, bs As Variant, j As Long
+#End If
     ks = Array("{UP}", "{DOWN}", "{LEFT}", "{RIGHT}", "+{UP}", "+{DOWN}", "+{LEFT}", "+{RIGHT}", " ", "~", "{ESC}", "{TAB}", _
                "w", "a", "s", "d", "e", "f", "y", "n", "q", "m", "+w", "+a", "+s", "+d", "+e", "+f", "1", "2", "3", "4", "5", "6", "7")
     On Error Resume Next
@@ -382,6 +392,23 @@ Private Sub HookKeys(ByVal hook As Boolean)
             Application.OnKey CStr(ks(i))
         End If
     Next i
+#If Mac Then
+#Else
+    ' Ctrl is fire, and on Windows nearly every Ctrl combination with a game key is an Excel
+    ' shortcut: Ctrl+W (fire while walking) closes the workbook, Ctrl+1 opens a dialog.
+    ms = Array("^", "^+")
+    bs = Array("{UP}", "{DOWN}", "{LEFT}", "{RIGHT}", " ", "~", "{TAB}", "w", "a", "s", "d", "e", "f", "y", "n", "q", "m", _
+               "1", "2", "3", "4", "5", "6", "7")
+    For j = LBound(ms) To UBound(ms)
+        For i = LBound(bs) To UBound(bs)
+            If hook Then
+                Application.OnKey CStr(ms(j)) & CStr(bs(i)), ""
+            Else
+                Application.OnKey CStr(ms(j)) & CStr(bs(i))
+            End If
+        Next i
+    Next j
+#End If
     On Error GoTo 0
 End Sub
 
@@ -444,6 +471,12 @@ Private Sub Present(ByVal buf As Long, ByVal pal As Long)
     Dim tp0 As Double, tp1 As Double, tp2 As Double
     Dim BatchAt As Long
     BatchAt = BATCHMIN
+#If Mac Then
+#Else
+    ' On Windows a fill made with screen updating on costs about 0.4 ms per rectangle and a full
+    ' redraw about 50 ms, so the full redraw wins from about a hundred rectangles up.
+    BatchAt = BATCHWIN
+#End If
     If (PresentMode And 4) <> 0 Then BatchAt = 1000000
     If (PresentMode And 128) <> 0 Then BatchAt = 1
     tp0 = Hi()
