@@ -20,7 +20,8 @@ def run(nticks=3, checked=True, strict=True, check_index=True, warp=1, verbose=T
     def sleep(ms): st['clock'] += ms
     natives = {'imp_draw_frame': (draw, ['L', 'L'], None), 'imp_ticks_ms': (ticks, [], 'L'),
                'imp_sleep_ms': (sleep, ['L'], None), 'imp_poll_key': (lambda: 0, [], 'L'),
-               'imp_mouse_buttons': (lambda: 0, [], 'L'), 'imp_mouse_dx': (lambda: 0, [], 'L')}
+               'imp_mouse_buttons': (lambda: 0, [], 'L'), 'imp_mouse_dx': (lambda: 0, [], 'L'),
+               'imp_play_sound': (lambda p, n, rate, vol, sep: 0, ['L'] * 5, 'L')}
     emu = vbaemu.Emu(mods, natives, strict=strict, check_index=check_index)
     if verbose: print('translate+compile %.1fs (python source %.1f MB)' % (time.time() - t0, emu.pysrc_len / 1e6), flush=True)
     wad = open('vendor/wad/doom1.wad', 'rb').read()

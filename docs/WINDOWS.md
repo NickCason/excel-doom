@@ -103,4 +103,53 @@ By what the player is doing, from the telemetry reports (frames per second):
 
 These are single runs of 14 to 31 s on one machine. A still picture runs at about 45 fps. Motion is now held at about 10 fps by the full redraw: a moving frame is about 15 ms of engine, 5 ms of fills and 50 ms of redraw. Always taking the full redraw is worse than either threshold, because the weapon bob and status-bar frames then pay 50 ms each. Anything faster in motion has to make the full redraw itself cheaper (the audit suggests it scales with what is on screen: zoom and the number of visible rows).
 
-Not yet done: a session played by a person, mouse look, and any second machine or Excel version.
+## Picture quality: streaks and flat patches
+
+The complaint from the first person to play it on Windows: horizontal smearing and grey or black patches. `Host.PlayRaw` plus `Host.Dump` (written out by `win\verify.ps1 -Dump`, compared by `tests\picture_check.py`) take three pictures of the same instant: the engine's frame, what the painter believes each cell shows, and the fill colour each cell really has.
+
+- **The cells are right.** Painter's record against real cells: no difference in any run. Excel paints exactly what it is told.
+- **The painter is the cause.** Engine frame against cells, stopping in mid-motion: 55 % of pixels differ, by up to 40 per colour channel, and the mean same-colour run along a row is 4.9 pixels against the engine's 2.1. That is the near-colour merging in `Present`. It paints colours within a tolerance as one, the tolerance rises to 24 while frames are busy, and a cell already within tolerance of the right colour is not repainted, so pieces of old frames stay.
+- **It did not clear at rest.** The tolerance only came back down while frames were small. In a room with an animated floor they never are, so the walls stayed streaked for as long as the player stood there.
+
+What changed, on Windows only (`TolLo`, `TolHi`, `TolSettle` in `RunDoom`; `ViewCheck`):
+
+- The ceiling is 16 instead of 24. At 24 dark areas lose their detail: 8,500 pixels were off by 17 to 24; at 16, under 100.
+- When the player has neither moved nor turned for ten frames, the tolerance drops to 0. That frame rescans everything and repaints it exactly (5,600 rectangles, 70 ms in the test), and it stays exact while only parts of the picture change. Measured after standing still: 0.0 % of pixels differ.
+- A fix on the way: the old rule could overshoot its ceiling (18 seen with a ceiling of 16).
+
+Frame rate on the scripted run is unchanged within noise (about 22 fps average, about 10 moving). While moving, the picture is still merged at tolerance 8 to 16; that is the price of the frame rate. `DOOM_TOL=lo,hi,settle` at build time overrides the three numbers (`8,24,8` is the Mac behaviour). The Mac build is unchanged and has the same merging.
+
+Seen while measuring, not fixed: when frames are slow (200 ms and more) the game falls behind the keys. A 2.5 s key hold kept the view moving for about 4.5 s.
+
+## Sound
+
+Sound effects play on Windows. Music does not, and the Mac build stays silent.
+
+- **Engine side** (`doom/dg_xl.c`): a sound module for the engine's own `sound_module_t` interface, switched on with `-DFEATURE_SOUND`. When the game starts an effect, the module finds the lump in the WAD, checks its header and hands the 8-bit samples to the host through one new import, `play_sound(pcm, length, rate, volume, separation)`. `doom/SDL_mixer.h` is an empty file: `i_sound.c` includes that header when sound is on and uses nothing from it.
+- **Host side** (`imp_play_sound` in `hostvba.py`): copies the samples behind a 44-byte wave header, scaled by the game's volume, and calls `PlaySound` with `SND_MEMORY` and `SND_ASYNC`. Two buffers take turns because the one that is playing must not be written. `RunDoom` stops playback on the way out, before the buffers can go away. On Mac, and in `Host.Verify`, the host declines and nothing is played.
+- **One voice.** `PlaySound` plays one sound at a time, so a new effect cuts the last one off. The engine module lets a new effect in unless the one playing has the more important priority (the lower number in `sounds.c`), and counts the playing time in game tics. Stereo separation is passed but not used.
+
+Checked on the first machine:
+
+- The frame checksums are unchanged: 82 of 82 under wasmtime and in Excel, so the sound code does not disturb the game.
+- Under wasmtime, five pistol shots give five calls of 5629 samples at 11025 Hz.
+- In Excel, a 29 s scripted run asked for 19 effects and Windows started all 19, at 0.3 ms each in the host. The frame rate did not change.
+- The peak meter of the default output device was silent for the whole of a second run except the 3.5 s of the five fire taps.
+
+Not checked: how it sounds. Nobody has listened to it yet.
+
+## Around the game
+
+The workbook opens on the game sheet: the title screen in the cells with a click-to-play sign over it. The sheet is stored at 50 % zoom so the whole frame shows even on a small screen; `Workbook_Open` calls `Splash`, which fits it to the window and removes the two lines under the frame that say how to allow macros (they are only seen by someone whose macros are off). Behind it are a cheat sheet and a checklist (`frontsheets.py`). The checklist is the scoreboard: after each game `LogRun` ticks the box on its last task and writes kills, items, secrets, time and map into the row. That box is a text box that runs `PlayDoom`.
+
+Three things that were learned building this:
+
+- **One more picture on the game sheet halves the frame rate.** The first click-to-play sign was a fifth picture over the middle of the game. With it the same scripted run averaged 14 fps instead of 28, and hiding it or parking it below the frame during play made no difference. So the sign is not a picture: it is part of the title screen in the cells at build time, and when a game ends `GameOff` writes it into the engine's last frame and sends that through `Present`.
+- **A click on the picture is a `SelectionChange`.** With no picture to carry a macro, the sheet's `SelectionChange` event calls `CellClick`. Arrow keys fire the same event, but only ever move one cell, so only a selection that jumps into the picture from further away starts a game. `win\clicktest.ps1` checks both.
+- **The sign must be painted before `Playing` goes false.** `Present` ends in `DoEvents`, and a click waiting in the queue would otherwise start a second game inside the first one's clean-up.
+
+Keys the host handles itself rather than passing to the engine: V (sound), 8, 9 and 0 (it queues the key presses of `iddqd`, `idkfa` and `idspispopd`). Their Ctrl combinations are disabled with the rest; Ctrl+P, Ctrl+V and Ctrl+0 were checked.
+
+`win\clicktest.ps1` opens the workbook, clicks the splash with a real mouse click, fires, quits, presses arrow keys over the picture, clicks the picture to play again, starts a third game from the checklist's box and reads the checklist row back.
+
+Not yet done: a session played by a person, mouse look, and any second machine or Excel version. The automated tests open the workbook through automation, where macros are already allowed; nobody has yet opened it by double-clicking and pressed Enable Content.

@@ -42,10 +42,12 @@ u32.DispatchMessageW.argtypes = [ctypes.POINTER(wintypes.MSG)]
 ENUMPROC = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
 
 VK = dict(ctrl=0x11, shift=0x10, alt=0x12, left=0x25, up=0x26, right=0x27, down=0x28,
-          w=0x57, a=0x41, s=0x53, d=0x44, q=0x51, space=0x20, **{'1': 0x31})
+          w=0x57, a=0x41, s=0x53, d=0x44, q=0x51, space=0x20, v=0x56, p=0x50,
+          **{'1': 0x31, '8': 0x38, '9': 0x39, '0': 0x30})
 EXTENDED = {0x25, 0x26, 0x27, 0x28}
 OUT = 'out'
 RESULT = os.path.join(OUT, 'play_result.txt')
+STATE = os.path.join(OUT, 'play_state.txt')
 
 def windows():
     """[(hwnd, class, title, pid)] for every visible top-level window."""
@@ -148,6 +150,10 @@ def summary(out):
                  float(f['tbatch']) / nb * 1000, f['nsettle']))
         print('avg fps %.1f over %.1f s | fill errors %s %s | front-window check %s | telemetry file %s'
               % (n / run, run, f['fillerr'], f['errtext'], f['front'], f.get('telefile', '')))
+        if 'sndasked' in f:
+            print('SOUND: engine asked for %s effects, Windows started %s, refused %s | %.1f s of audio | %.1f ms per effect in the host'
+                  % (f['sndasked'], f['sndplayed'], f['sndfailed'], int(f['sndsamples']) / 11025,
+                     float(f['tsnd']) / max(1, int(f['sndasked'])) * 1000))
         tele = {}
         if os.path.exists(f.get('telefile', '')):
             tele = dict(l.rstrip('\n').split('=', 1) for l in open(f['telefile'], encoding='utf-8', errors='replace') if '=' in l)
@@ -163,13 +169,16 @@ def summary(out):
 def main():
     combos = 'combos' in sys.argv[1:]
     macro = ([a for a in sys.argv[1:] if a.startswith('Host.')] or ['Host.Play'])[0]
+    raw = macro == 'Host.PlayRaw'                        # stop in mid-motion and dump the picture (tests\picture_check.py)
     os.makedirs(OUT, exist_ok=True)
-    if os.path.exists(RESULT):
-        os.remove(RESULT)
+    for old in (RESULT, STATE):
+        if os.path.exists(old):
+            os.remove(old)
     release_all()                                        # a key left down by an earlier run would quit this one
     known = {h for h, c, t, p in windows() if c == 'XLMAIN'}
     ps = subprocess.Popen(['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', os.path.join('win', 'verify.ps1'),
-                           '-Macro', macro, '-Out', RESULT, '-Maximize', '-Linger', '3'])
+                           '-Macro', macro, '-Out', RESULT, '-Maximize', '-Linger', '3', '-State', STATE]
+                          + (['-Dump', os.path.join(OUT, 'frame_')] if raw else []))
     hwnd = pid = None
     t0 = time.time()
     while hwnd is None and time.time() - t0 < 90 and ps.poll() is None:
@@ -192,21 +201,39 @@ def main():
         shot(hwnd, 'wpt3')
         hold(hwnd, ['w'], 1.5); time.sleep(0.3)          # walk
         shot(hwnd, 'wpt4')
+        hold(hwnd, ['9'], 0.12); time.sleep(0.8)         # cheat key: the host types IDKFA, bullets go to 200
+        shot(hwnd, 'wpt5')
+        hold(hwnd, ['v'], 0.12); time.sleep(0.4)         # sound off: this shot must not reach Windows
+        hold(hwnd, ['ctrl'], 0.08); time.sleep(0.7)
+        hold(hwnd, ['v'], 0.12); time.sleep(0.4)         # sound back on
+        hold(hwnd, ['p'], 0.12); time.sleep(0.8)         # pause
+        shot(hwnd, 'wpt6')
+        hold(hwnd, ['p'], 0.12); time.sleep(0.5)
         if combos:
             # Alt is left out on purpose: it switches the ribbon to KeyTips mode whatever the workbook does
             for names in (['shift', 'w'], ['ctrl', 'w'], ['ctrl', 'shift', 'w'], ['ctrl', 'a'], ['ctrl', 'd'], ['ctrl', 's'],
-                          ['ctrl', '1'], ['ctrl', 'space'], ['ctrl', 'left']):
+                          ['ctrl', '1'], ['ctrl', 'space'], ['ctrl', 'left'], ['ctrl', 'p'], ['ctrl', 'v'], ['ctrl', '0']):
                 if ps.poll() is not None or not u32.IsWindowVisible(hwnd):
                     print('  workbook window is gone before %s' % '+'.join(names), flush=True); break
                 hold(hwnd, names, 0.8); time.sleep(0.6)
                 print('  after %s: workbook window visible=%s, other Excel windows=%s'
                       % ('+'.join(names), bool(u32.IsWindowVisible(hwnd)), dialogs(pid)), flush=True)
                 shot(hwnd, 'wpt_' + '_'.join(names))
-        for _ in range(5):                               # a tap can fall inside one long repaint: retry
+        if raw:                                          # walk and turn, then quit without stopping ...
+            hold(hwnd, ['w', 'left'], 2.5)
+            if 'still' in sys.argv[1:]:                  # ... or stand still first. The game runs behind the
+                time.sleep(6.0)                          # keys when frames are slow, so give it time to stop.
+                quit_sent = hold(hwnd, ['q'], 0.15)
+            else:
+                quit_sent = hold(hwnd, ['w', 'left', 'q'], 0.15)
+            time.sleep(0.5)
+        for _ in range(0 if raw and os.path.exists(RESULT) else 5):   # a tap can fall inside one long repaint: retry
             quit_sent = hold(hwnd, ['q'], 0.12) or quit_sent
             time.sleep(0.5)
             if os.path.exists(RESULT) or ps.poll() is not None:
                 break
+        time.sleep(0.6)
+        shot(hwnd, 'wpt_end')                            # the last frame with the click-to-play sign over it
         ps.wait(timeout=60 if quit_sent else 5)
     except subprocess.TimeoutExpired:
         print('game did not end (Q sent: %s); other Excel windows: %s' % (quit_sent, dialogs(pid)), flush=True)
@@ -223,6 +250,8 @@ def main():
                 ps.kill()
     if os.path.exists(RESULT):
         summary(open(RESULT, encoding='utf-8-sig', errors='replace').read())
+        if os.path.exists(STATE):
+            print('AFTER: ' + ' | '.join(l.strip() for l in open(STATE, encoding='utf-8-sig', errors='replace') if l.strip()))
         return 0
     print('no result: the macro never returned')
     return 1

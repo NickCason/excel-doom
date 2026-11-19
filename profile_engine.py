@@ -9,7 +9,8 @@ def main(nticks=20, warp=1):
     st = dict(clock=0)
     natives = {'imp_draw_frame': (lambda b, p: None, ['L', 'L'], None), 'imp_ticks_ms': (lambda: st['clock'] & 0x7FFFFFFF, [], 'L'),
                'imp_sleep_ms': (lambda ms: st.__setitem__('clock', st['clock'] + ms), ['L'], None), 'imp_poll_key': (lambda: 0, [], 'L'),
-               'imp_mouse_buttons': (lambda: 0, [], 'L'), 'imp_mouse_dx': (lambda: 0, [], 'L')}
+               'imp_mouse_buttons': (lambda: 0, [], 'L'), 'imp_mouse_dx': (lambda: 0, [], 'L'),
+               'imp_play_sound': (lambda p, n, rate, vol, sep: 0, ['L'] * 5, 'L')}
     emu = vbaemu.Emu(mods, natives, strict=False, check_index=False)
     wad = open('vendor/wad/doom1.wad', 'rb').read(); pad = wad + b'\0' * (-len(wad) % 4)
     emu.ns['WD'] = list(struct.unpack('<%di' % (len(pad) // 4), pad)); emu.ns['WDLen'] = len(wad)

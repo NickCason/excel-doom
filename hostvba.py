@@ -33,6 +33,8 @@ Private Declare PtrSafe Function QueryPerformanceFrequency Lib "kernel32" (ByRef
 Private Declare PtrSafe Function GetCursorPos Lib "user32" (ByRef p As POINTAPI) As Long
 Private Declare PtrSafe Function SetCursorPos Lib "user32" (ByVal x As Long, ByVal y As Long) As Long
 Private Declare PtrSafe Function GetSystemMetrics Lib "user32" (ByVal n As Long) As Long
+Private Declare PtrSafe Function PlaySoundMem Lib "winmm" Alias "PlaySoundA" (ByRef snd As Byte, ByVal hmod As LongPtr, ByVal flags As Long) As Long
+Private Declare PtrSafe Function PlaySoundStop Lib "winmm" Alias "PlaySoundA" (ByVal snd As LongPtr, ByVal hmod As LongPtr, ByVal flags As Long) As Long
 #End If
 
 Private Const PW As Long = 320
@@ -45,6 +47,12 @@ Private Const WADC As Long = 701
 Private Const WADR As Long = 301
 Private Const BATCHMIN As Long = 1800
 Private Const BATCHWIN As Long = 100
+Private Const CHKROW As Long = 10
+Private Const STILLN As Long = 10
+Private Const BANX As Long = @@BANX@@
+Private Const BANY As Long = @@BANY@@
+Private Const BANW As Long = @@BANW@@
+Private Const BANH As Long = @@BANH@@
 Private Const MSENS As Double = 6#
 
 Private Const BUILD_ID As String = "@@BUILD@@"
@@ -85,6 +93,13 @@ Private LogT(0 To 4095) As Double, LogA(0 To 4095) As Long, LogM(0 To 4095) As L
 Private DbgFillErr As Long, DbgErrText As String, DbgReadBad As Long, DbgReadOk As Long
 Private Virt As Boolean, VClock As Long
 Private Sums(0 To 199) As LongLong, NSums As Long
+Private WavA() As Byte, WavB() As Byte, WavCapA As Long, WavCapB As Long, WavUseB As Boolean
+Private SndVol(0 To 255) As Byte, SndVolNow As Long
+Private SndAsked As Long, SndPlayed As Long, SndFailed As Long, SndSamples As Long, TSnd As Double
+Private SndMute As Boolean, Cheats As Long, RunCount As Long
+Private LastBuf As Long, LastPal As Long, SelR As Long, SelC As Long
+Private TolLo As Long, TolHi As Long, TolSettle As Long
+Private ViewA As Long, ViewX As Long, ViewY As Long, ViewStill As Long, PalSeen As Long
 
 ' ---------------------------------------------------------------- telemetry clock
 ' Timer only ticks 64 times a second on Mac; this counts in nanoseconds. Used for measurement only.
@@ -141,6 +156,7 @@ Public Sub imp_draw_frame(ByVal buf As Long, ByVal pal As Long)
         t = Timer
         Present buf, pal
         TPaint = TPaint + (Timer - t)
+        LastBuf = buf: LastPal = pal
     End If
     Frames = Frames + 1
 End Sub
@@ -200,6 +216,107 @@ Public Function imp_mouse_dx() As Long
     imp_mouse_dx = CLng(d)
 End Function
 
+' ---------------------------------------------------------------------- sound
+' The engine hands over the 8-bit samples of one effect. Windows plays a wave file straight from
+' memory, so the samples are copied behind a 44-byte header and started without waiting. One
+' effect at a time: starting the next one ends the last. Two buffers take turns, because the one
+' that is playing must not be touched. Returns 1 if the effect was started.
+Private Sub WavFill(ByVal p As Long, ByVal n As Long, ByVal rate As Long, ByRef b() As Byte)
+    Dim i As Long, a As Long, w As Long, j As Long, e As Long
+    b(0) = 82: b(1) = 73: b(2) = 70: b(3) = 70                              ' RIFF
+    w = n + 36
+    b(4) = w And 255: b(5) = (w \ 256) And 255: b(6) = (w \ 65536) And 255: b(7) = (w \ 16777216) And 255
+    b(8) = 87: b(9) = 65: b(10) = 86: b(11) = 69                            ' WAVE
+    b(12) = 102: b(13) = 109: b(14) = 116: b(15) = 32                       ' fmt
+    b(16) = 16: b(17) = 0: b(18) = 0: b(19) = 0
+    b(20) = 1: b(21) = 0: b(22) = 1: b(23) = 0                              ' PCM, one channel
+    b(24) = rate And 255: b(25) = (rate \ 256) And 255: b(26) = (rate \ 65536) And 255: b(27) = 0
+    b(28) = b(24): b(29) = b(25): b(30) = b(26): b(31) = 0                  ' bytes a second
+    b(32) = 1: b(33) = 0: b(34) = 8: b(35) = 0                              ' 8 bits
+    b(36) = 100: b(37) = 97: b(38) = 116: b(39) = 97                        ' data
+    b(40) = n And 255: b(41) = (n \ 256) And 255: b(42) = (n \ 65536) And 255: b(43) = (n \ 16777216) And 255
+    a = p: e = p + n: j = 44
+    Do While a < e And (a And 3) <> 0                                       ' up to the next whole word
+        w = M(a \ 4)
+        Select Case a And 3
+            Case 1: b(j) = SndVol((w And &HFF00&) \ 256)
+            Case 2: b(j) = SndVol((w And &HFF0000) \ 65536)
+            Case 3: b(j) = SndVol(((w And &HFF000000) \ 16777216) And 255)
+        End Select
+        a = a + 1: j = j + 1
+    Loop
+    i = a \ 4
+    Do While a + 3 < e
+        w = M(i)
+        b(j) = SndVol(w And 255): b(j + 1) = SndVol((w And &HFF00&) \ 256)
+        b(j + 2) = SndVol((w And &HFF0000) \ 65536): b(j + 3) = SndVol(((w And &HFF000000) \ 16777216) And 255)
+        i = i + 1: a = a + 4: j = j + 4
+    Loop
+    Do While a < e
+        w = M(a \ 4)
+        Select Case a And 3
+            Case 0: b(j) = SndVol(w And 255)
+            Case 1: b(j) = SndVol((w And &HFF00&) \ 256)
+            Case 2: b(j) = SndVol((w And &HFF0000) \ 65536)
+        End Select
+        a = a + 1: j = j + 1
+    Loop
+End Sub
+
+Public Function imp_play_sound(ByVal p As Long, ByVal n As Long, ByVal rate As Long, ByVal vol As Long, ByVal sep As Long) As Long
+    Dim i As Long, t As Double, ok As Long
+    imp_play_sound = 0
+#If Mac Then
+#Else
+    If Virt Or SndMute Then Exit Function
+    If n <= 0 Or n > 4000000 Or vol <= 0 Then Exit Function
+    SndAsked = SndAsked + 1
+    On Error GoTo NoSound
+    t = Hi()
+    If vol > 127 Then vol = 127
+    If vol <> SndVolNow Then
+        ' samples are unsigned around 128; the engine's volume runs to 127
+        For i = 0 To 255
+            SndVol(i) = 128 + ((i - 128) * vol) \ 127
+        Next i
+        SndVolNow = vol
+    End If
+    WavUseB = Not WavUseB
+    If WavUseB Then
+        If WavCapB < n + 44 Then
+            WavCapB = n + 44 + 4096: ReDim WavB(0 To WavCapB - 1)
+        End If
+        WavFill p, n, rate, WavB
+        ok = PlaySoundMem(WavB(0), 0, 7)                                    ' SND_ASYNC, SND_NODEFAULT, SND_MEMORY
+    Else
+        If WavCapA < n + 44 Then
+            WavCapA = n + 44 + 4096: ReDim WavA(0 To WavCapA - 1)
+        End If
+        WavFill p, n, rate, WavA
+        ok = PlaySoundMem(WavA(0), 0, 7)
+    End If
+    If ok <> 0 Then
+        SndPlayed = SndPlayed + 1: SndSamples = SndSamples + n: imp_play_sound = 1
+    Else
+        SndFailed = SndFailed + 1
+    End If
+    TSnd = TSnd + (Hi() - t)
+    Exit Function
+NoSound:
+    SndFailed = SndFailed + 1
+#End If
+End Function
+
+' Nothing may still be playing from the buffers when they go away with the workbook.
+Private Sub SoundOff()
+#If Mac Then
+#Else
+    On Error Resume Next
+    PlaySoundStop 0, 0, 0
+    On Error GoTo 0
+#End If
+End Sub
+
 ' ------------------------------------------------------------ keyboard, mouse
 Private Sub AddKey(ByVal macCode As Long, ByVal winCode As Long, ByVal doomKey As Long, ByVal nm As String)
 #If Mac Then
@@ -228,6 +345,21 @@ Private Sub InitKeys()
     AddKey 23, &H35, 53, "5": AddKey 22, &H36, 54, "6": AddKey 26, &H37, 55, "7"
     AddKey 12, &H51, 0, "q"
     AddKey 46, &H4D, -1, "m"
+    ' not game keys: the host acts on these itself (see PollKeys)
+    AddKey 9, &H56, -2, "v"
+    AddKey 28, &H38, -3, "8": AddKey 25, &H39, -4, "9": AddKey 29, &H30, -5, "0"
+    AddKey 35, &H50, &HFF, "p"
+End Sub
+
+' The engine has the original cheat codes, but they cannot be typed: the letters are not game keys
+' here and Q quits. So the host types a code for the player, as key presses nobody made.
+Private Sub TypeCheat(ByVal code As String)
+    Dim i As Long, c As Long
+    For i = 1 To Len(code)
+        c = Asc(Mid$(code, i, 1))
+        KQ(KQTail) = 47 * 65536 + 256 + c: KQTail = (KQTail + 1) And 255
+        KQ(KQTail) = 47 * 65536 + c: KQTail = (KQTail + 1) And 255
+    Next i
 End Sub
 
 Private Function KeyIsDown(ByVal code As Long) As Long
@@ -285,8 +417,17 @@ Private Sub PollKeys()
                 KDown(i) = 1: KDeliv(i) = 0: KHits(i) = KHits(i) + 1: KDefer(i) = 0
                 If KDoom(i) = 0 Then
                     Running = False
-                ElseIf KDoom(i) < 0 Then
+                ElseIf KDoom(i) = -1 Then
                     MouseOn = Not MouseOn: MArmed = False: MToggles = MToggles + 1
+                ElseIf KDoom(i) = -2 Then
+                    SndMute = Not SndMute
+                    If SndMute Then SoundOff
+                ElseIf KDoom(i) = -3 Then
+                    TypeCheat "iddqd": Cheats = Cheats + 1
+                ElseIf KDoom(i) = -4 Then
+                    TypeCheat "idkfa": Cheats = Cheats + 1
+                ElseIf KDoom(i) = -5 Then
+                    TypeCheat "idspispopd": Cheats = Cheats + 1
                 Else
                     KQ(KQTail) = i * 65536 + 256 + KDoom(i)
                     KQTail = (KQTail + 1) And 255
@@ -383,7 +524,8 @@ Private Sub HookKeys(ByVal hook As Boolean)
     Dim ms As Variant, bs As Variant, j As Long
 #End If
     ks = Array("{UP}", "{DOWN}", "{LEFT}", "{RIGHT}", "+{UP}", "+{DOWN}", "+{LEFT}", "+{RIGHT}", " ", "~", "{ESC}", "{TAB}", _
-               "w", "a", "s", "d", "e", "f", "y", "n", "q", "m", "+w", "+a", "+s", "+d", "+e", "+f", "1", "2", "3", "4", "5", "6", "7")
+               "w", "a", "s", "d", "e", "f", "y", "n", "q", "m", "+w", "+a", "+s", "+d", "+e", "+f", "1", "2", "3", "4", "5", "6", "7", _
+               "v", "p", "8", "9", "0", "+v", "+p")
     On Error Resume Next
     For i = LBound(ks) To UBound(ks)
         If hook Then
@@ -398,7 +540,7 @@ Private Sub HookKeys(ByVal hook As Boolean)
     ' shortcut: Ctrl+W (fire while walking) closes the workbook, Ctrl+1 opens a dialog.
     ms = Array("^", "^+")
     bs = Array("{UP}", "{DOWN}", "{LEFT}", "{RIGHT}", " ", "~", "{TAB}", "w", "a", "s", "d", "e", "f", "y", "n", "q", "m", _
-               "1", "2", "3", "4", "5", "6", "7")
+               "1", "2", "3", "4", "5", "6", "7", "v", "p", "8", "9", "0")
     For j = LBound(ms) To UBound(ms)
         For i = LBound(bs) To UBound(bs)
             If hook Then
@@ -456,6 +598,23 @@ Private Sub InitDisplay()
     ScanAll = True: Dirty = False: UnbStreak = 0: LastTol = TolCur: StillFrames = 0
 End Sub
 
+' Merging near colours saves paint calls, and it is worth it while the whole view moves. It also
+' leaves streaks: a cell that is near enough to the right colour is not repainted, so pieces of
+' old frames stay. So when the player has neither moved nor turned for STILLN frames the tolerance
+' drops to TolSettle, which makes that frame rescan and repaint everything exactly, and it stays
+' there while only parts of the picture change (doors, monsters, animated floors).
+Private Sub ViewCheck()
+    Dim a As Long, x As Long, y As Long
+    a = x_dg_stat(2): x = x_dg_stat(3): y = x_dg_stat(4)
+    If a <> ViewA Or x <> ViewX Or y <> ViewY Then
+        ViewA = a: ViewX = x: ViewY = y: ViewStill = 0
+        If TolCur < TolLo Then TolCur = TolLo
+    Else
+        ViewStill = ViewStill + 1
+        If ViewStill = STILLN Then TolCur = TolSettle
+    End If
+End Sub
+
 ' Paint one engine frame into the cells.
 '  - rows whose pixels did not change since last frame are skipped outright
 '  - changed pixels are grouped into runs of near-identical colour, runs that line up
@@ -480,6 +639,7 @@ Private Sub Present(ByVal buf As Long, ByVal pal As Long)
     If (PresentMode And 4) <> 0 Then BatchAt = 1000000
     If (PresentMode And 128) <> 0 Then BatchAt = 1
     tp0 = Hi()
+    If TolSettle < TolLo Then ViewCheck
     tl = TolCur
     If tl < LastTol Then ScanAll = True
     LastTol = tl
@@ -587,10 +747,18 @@ Private Sub Present(ByVal buf As Long, ByVal pal As Long)
     Next y
     ScanAll = False
     Calls = Calls + NR: TolSum = TolSum + tl
-    If NR > 4500 Then
-        If TolCur < 24 Then TolCur = TolCur + 4
+    If NR > 4500 And (ViewStill < STILLN Or NR > 9000) Then
+        If TolCur < TolLo Then
+            TolCur = TolLo
+        ElseIf TolCur < TolHi Then
+            TolCur = TolCur + 4
+        End If
+        If TolCur > TolHi Then TolCur = TolHi
+    ElseIf ViewStill >= STILLN Then
+        ' the view is at rest: exact again as soon as a frame is not huge (a palette fade can be)
+        If NR < 6000 Then TolCur = TolSettle
     ElseIf NR < 2000 Then
-        If TolCur > 8 Then TolCur = TolCur - 2
+        If TolCur > TolLo Then TolCur = TolCur - 2
     End If
     tp1 = Hi(): TScan = TScan + (tp1 - tp0)
     PScan = PScan + (tp1 - tp0) * 1000: PRects = PRects + NR: TolNow = tl
@@ -734,20 +902,118 @@ Private Function OutTail() As String
     OutTail = s
 End Function
 
+' ------------------------------------------------------------- around a game
+' The workbook opens on the game sheet: the title screen in the cells with the click-to-play sign
+' over it, and under the frame two lines about allowing macros. Those lines only matter to
+' someone whose macros are off, so the first macro that runs takes them away.
+Private Sub GameOn()
+    On Error Resume Next
+    WS.Activate
+    If Len(WS.Cells(FH + 1, 2).Value) > 0 Then WS.Range(WS.Cells(FH + 1, 2), WS.Cells(FH + 2, 2)).Value = ""
+    On Error GoTo 0
+End Sub
+
+' Runs when the workbook is opened with macros allowed (ThisWorkbook, Workbook_Open): fit the
+' frame to the window, as a game would on starting.
+Public Sub Splash()
+    On Error Resume Next
+    Set WS = ThisWorkbook.Worksheets(1)
+    GameOn
+    Layout
+    ThisWorkbook.Saved = True
+    On Error GoTo 0
+End Sub
+
+' The click-to-play sign, one hex string of palette indices per row (written by mkdoom.py).
+Private Sub BannerRows(ByRef r() As String)
+    ReDim r(0 To BANH - 1)
+    '@@BANNERROWS@@
+End Sub
+
+' When a game ends the sign goes back over the picture. It is not a picture object, because one
+' more picture on this sheet halves the frame rate on Windows even while it is hidden: it is
+' written into the engine's last frame, and the normal painter puts it in the cells.
+Private Sub GameOff()
+    Dim r() As String, x As Long, y As Long, a As Long
+    On Error Resume Next
+    If LastBuf <> 0 Then
+        BannerRows r
+        For y = 0 To BANH - 1
+            a = LastBuf + (BANY + y) * PW + BANX
+            For x = 0 To BANW - 1
+                ST8 a + x, CLng("&H" & Mid$(r(y), x * 2 + 1, 2))
+            Next x
+        Next y
+        TolCur = 4
+        Present LastBuf, LastPal
+    End If
+    On Error GoTo 0
+End Sub
+
+' A mouse click on the picture while no game is running starts one (the sheet's SelectionChange
+' event calls this). Arrow keys move the selection as well, but only ever to the next cell, so
+' a selection that lands in the picture from further away is taken to be a click.
+Public Sub CellClick(ByVal r As Long, ByVal c As Long)
+    Dim jump As Boolean
+    jump = Abs(r - SelR) + Abs(c - SelC) > 1
+    SelR = r: SelC = c
+    If Playing Or Not jump Then Exit Sub
+    If r < GY + 1 Or r > GY + PH Or c < GX + 1 Or c > GX + PW Then Exit Sub
+    PlayDoom
+End Sub
+
+' Tick the checklist's last task and note how the game went.
+Private Sub LogRun()
+    Dim cs As Worksheet, kills As Long, items As Long, secrets As Long, secs As Long, map As Long, note As String
+    On Error Resume Next
+    Set cs = ThisWorkbook.Worksheets("Checklist")
+    kills = x_dg_stat(9): items = x_dg_stat(10): secrets = x_dg_stat(11): secs = x_dg_stat(12) \ 35: map = x_dg_stat(7)
+    If kills < 0 Then kills = 0
+    If items < 0 Then items = 0
+    If secrets < 0 Then secrets = 0
+    RunCount = RunCount + 1
+    note = "Run " & RunCount & ": " & kills & IIf(kills = 1, " demon", " demons") & " dispatched, " & items & IIf(items = 1, " item, ", " items, ") _
+         & secrets & IIf(secrets = 1, " secret, ", " secrets, ") & (secs \ 60) & ":" & Format(secs Mod 60, "00") & " on E" & (map \ 10) & "M" & (map Mod 10) & "."
+    If x_dg_stat(16) = 1 Then note = note & " Did not make it."
+    If Cheats > 0 Then note = note & " Cheated."
+    cs.Cells(CHKROW, 4).Value = note
+    cs.Shapes("Tick").TextFrame.Characters.Text = ChrW(9745)
+    ' the cell colours change with every frame; nobody wants to be asked about saving them
+    ThisWorkbook.Saved = True
+    On Error GoTo 0
+End Sub
+
 ' ---------------------------------------------------------------- main loop
 Private Function RunDoom(ByVal virtMode As Boolean, ByVal nticks As Long) As String
     Dim t As Double, n As Long, msg As String, i As Long, tLoad As Double, tBoot As Double, tRun As Double, s As String
     Dim tA As Double, tB As Double, tPrev As Double, t16 As Double, frameMs As Double, waitMs As Double, engMs As Double, telefile As String
+    Dim sbx As String
     On Error GoTo Fail
     Set WS = ThisWorkbook.Worksheets(1)
-    Virt = virtMode: VClock = 0: Frames = 0: Calls = 0: TPaint = 0: NSums = 0: Batched = 0: TolCur = 8: TolSum = 0: EvtCount = 0
+    Virt = virtMode: VClock = 0: Frames = 0: Calls = 0: TPaint = 0: NSums = 0: Batched = 0: TolSum = 0: EvtCount = 0
+    ' How far apart two colours may be and still be painted as one. It rises while frames are
+    ' busy and falls while they are quiet; cells within it of the right colour are left alone.
+    ' TolLo..TolHi is the range while things move; TolSettle is what a quiet picture is brought to
+    ' (equal to TolLo: never). Windows: a lower ceiling, because 24 turns dark areas into flat
+    ' patches, and an exact picture at rest.
+#If Mac Then
+    TolLo = 8: TolHi = 24: TolSettle = 8
+#Else
+    TolLo = @@TOLLO@@: TolHi = @@TOLHI@@: TolSettle = @@TOLSETTLE@@
+#End If
+    TolCur = TolLo: ViewStill = 0: ViewA = -2
     HeldNow = False: HoldOff = 0: NHeldBatch = 0
     TScan = 0: TFill = 0: TRedraw = 0: NZero = 0: NSmall = 0: OMCalls = 0: TUnb = 0: RectsUnb = 0: NUnb = 0: NSettle = 0
     TBatch = 0: CallsBatch = 0: DbgFillErr = 0: DbgErrText = "": DbgReadBad = 0: DbgReadOk = 0
     LogN = 0
     DbgPolls = 0: DbgNotFront = 0: DbgDowns = 0: DbgUps = 0: DbgPops = 0: DbgClk = 0: DbgBtn = 0
+    SndAsked = 0: SndPlayed = 0: SndFailed = 0: SndSamples = 0: TSnd = 0: SndVolNow = -1
+    Cheats = 0: LastBuf = 0
     If (PresentMode And 32) = 0 Then Application.EnableCancelKey = xlDisabled
-    If Not Virt Then Layout
+    If Not Virt Then
+        GameOn
+        Layout
+    End If
     TeleInit
     InitHi
     PalChanges = 0: ScanAllN = 0: RowsScanned = 0: RowsSkipped = 0: SleepCalls = 0: LastPollT = 0: PollSkips = 0: LastFullT = 0
@@ -800,11 +1066,18 @@ Private Function RunDoom(ByVal virtMode As Boolean, ByVal nticks As Long) As Str
             Next i
             TeleFrame tB - THiStart, frameMs, engMs, PScan, PFill, PRedraw, PRects, PClass, TolNow, waitMs
             LogT(LogN And 4095) = Timer: LogA(LogN And 4095) = x_dg_stat(2): LogM(LogN And 4095) = x_dg_stat(0): LogN = LogN + 1
+            ' picture diagnostics: per frame, rectangles painted and the tolerance they were painted at
+            If (PresentMode And 256) <> 0 Then LogA((LogN - 1) And 4095) = PRects: LogM((LogN - 1) And 4095) = TolNow * 10000 + IIf(ViewStill > 99, 99, ViewStill) * 100 + (PalChanges - PalSeen): PalSeen = PalChanges
             If MouseOn And (PresentMode And 16) = 0 Then
                 If ActiveCell.Row <> 1 Then WS.Cells(1, 1).Select
             End If
             If (n And 15) = 0 And (PresentMode And 8) = 0 Then
-                Application.StatusBar = "DOOM   " & Format(16 / (tB - t16 + 0.000001), "0") & " fps    fire: Ctrl or click    M: mouse " & IIf(MouseOn, "on", "off") & "    Q: quit"
+                sbx = ""
+#If Mac Then
+#Else
+                sbx = "    V: sound " & IIf(SndMute, "off", "on")
+#End If
+                Application.StatusBar = "DOOM   " & Format(16 / (tB - t16 + 0.000001), "0") & " fps    Ctrl: fire    M: mouse " & IIf(MouseOn, "on", "off") & sbx & "    8 9 0: cheats    P: pause    Q: quit"
                 t16 = tB
             End If
             If TeleToFile And (n Mod 3000) = 0 Then TeleSave TeleText(HostTele())
@@ -814,12 +1087,17 @@ Private Function RunDoom(ByVal virtMode As Boolean, ByVal nticks As Long) As Str
     msg = "ok"
 Cleanup:
     On Error Resume Next
+    SoundOff
+    LastEndT = Timer
+    ' still "playing" while the sign is painted, so a stray click cannot start a second game inside this one
+    If Not Virt And (PresentMode And 256) = 0 Then GameOff
     Playing = False
     Application.ScreenUpdating = True
     HookKeys False
     Application.StatusBar = False
     Application.EnableCancelKey = xlInterrupt
     If Not Virt And TeleToFile Then telefile = TeleSave(TeleText(HostTele() & "exit=" & msg & vbLf))
+    If Not Virt Then LogRun
     LastEndT = Timer
     On Error GoTo 0
     s = msg & "|load=" & Format(tLoad, "0.00") & "|boot=" & Format(tBoot, "0.00") & "|ticks=" & n & "|run=" & Format(tRun, "0.00") & "|frames=" & Frames & "|paint=" & Format(TPaint, "0.00") & "|calls=" & Calls
@@ -831,6 +1109,7 @@ Cleanup:
     s = s & "|nheldbatch=" & NHeldBatch
     s = s & "|telefile=" & telefile
     s = s & "|batched=" & Batched & "|tolsum=" & TolSum & "|evt=" & EvtCount & "|front=" & FrontOK & "|warp=" & Format(WarpX, "0") & "," & Format(WarpY, "0")
+    s = s & "|sndasked=" & SndAsked & "|sndplayed=" & SndPlayed & "|sndfailed=" & SndFailed & "|sndsamples=" & SndSamples & "|tsnd=" & Format(TSnd, "0.000")
     If Not Virt Then
         s = s & "|log="
         i = LogN - 400
@@ -892,6 +1171,7 @@ Public Function Audit() As String
     On Error GoTo Fail
     Set WS = ThisWorkbook.Worksheets(1)
     Set w = ThisWorkbook.Windows(1)
+    GameOn
     Layout
     s = "zoom=" & w.Zoom
     s = s & "|redraw_base=" & Format(Floor1(12), "0")
@@ -1073,5 +1353,35 @@ End Sub
 
 Public Function Verify() As String
     Verify = RunDoom(True, 40)
+End Function
+
+' Diagnostics for the picture. PlayRaw is a normal game that leaves the cells exactly as the last
+' frame left them (no click-to-play sign). Dump then returns 64,000 colours, six hex digits each,
+' row by row: 0 the engine's last frame through its palette, 1 what the painter believes each cell
+' shows, 2 the fill colour each cell really has.
+Public Function PlayRaw() As String
+    PresentMode = 256
+    TeleToFile = True
+    PlayRaw = RunDoom(False, 0)
+End Function
+
+Public Function Dump(ByVal what As Long) As String
+    Dim s As String, i As Long, c As Long, x As Long, y As Long
+    On Error Resume Next
+    s = String$(PW * PH * 6, "0")
+    For y = 0 To PH - 1
+        For x = 0 To PW - 1
+            i = y * PW + x
+            If what = 0 Then
+                c = PalC(LD8(LastBuf + i))
+            ElseIf what = 1 Then
+                c = Shown(i)
+            Else
+                c = WS.Cells(GY + 1 + y, GX + 1 + x).Interior.Color
+            End If
+            Mid$(s, i * 6 + 1, 6) = Right$("00000" & Hex$(c And &HFFFFFF), 6)
+        Next x
+    Next y
+    Dump = s
 End Function
 '''

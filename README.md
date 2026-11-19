@@ -14,7 +14,7 @@ The real DOOM engine running inside a single Excel workbook. Every cell is a pix
 | Excel for Windows, 64-bit | Runs, lightly tested on one machine. The engine self-check passes. About 45 fps standing still, about 10 fps while moving. Keyboard only. See [docs/WINDOWS.md](docs/WINDOWS.md). |
 | 32-bit Excel, Excel Online, Numbers, LibreOffice | Not supported. |
 
-This is an experiment, not a product. No sound. No saving. It starts directly on E1M1.
+This is an experiment, not a product. Sound effects on Windows only, one at a time; no music. No saving. It starts directly on E1M1.
 
 ## How to play
 
@@ -22,8 +22,8 @@ This is an experiment, not a product. No sound. No saving. It starts directly on
 2. Allow macros.
    - **Mac:** choose *Enable Macros* when Excel asks.
    - **Windows:** Office blocks macros in downloaded files. Right-click the file, choose *Properties*, tick *Unblock*, then open it and choose *Enable Content*.
-3. Click the **CLICK HERE** panel on the right of the sheet (or run the macro `PlayDoom`).
-4. Press **Q** to quit back to Excel.
+3. The workbook opens on the title screen. Click it. (Or run the macro `PlayDoom`.)
+4. Press **Q** to quit back to Excel. Click anywhere on the picture to play again. The Cheat Sheet tab lists the keys and cheats; the Checklist tab notes how each run went.
 
 | Key | Action |
 |---|---|
@@ -38,7 +38,12 @@ This is an experiment, not a product. No sound. No saving. It starts directly on
 | Tab | Map |
 | Esc, Enter, Y, N | Menu |
 | M | Mouse look on/off |
+| P | Pause |
+| V | Sound on/off (Windows) |
+| 8 / 9 / 0 | Cheats: god mode / all weapons, keys and ammo / walk through walls |
 | Q | Quit |
+
+The cheat keys type the original codes (`IDDQD`, `IDKFA`, `IDSPISPOPD`) into the engine for you. They cannot be typed by hand: most of their letters are not game keys here, and Q quits.
 
 On Mac, mouse look pins the pointer to the top of the screen while Excel is in front. Press **M** to free it, or switch apps. Mouse look starts off on Windows.
 
@@ -46,8 +51,9 @@ On Mac, mouse look pins the pointer to the top of the screen while Excel is in f
 
 Macros are the whole point here, so it is fair to ask what they touch.
 
-- They change cell colours on the one sheet, and the zoom and gridline settings of that window.
+- They change cell colours on the game sheet, and the zoom and gridline settings of that window. One macro runs when the workbook opens: it fits the title screen to the window and removes the two lines under it about allowing macros. After each game they tick the box on the checklist, write one line about the run next to it, and mark the workbook as saved so that closing it does not ask about the changed colours.
 - While a game is running they ask the operating system which keys and mouse buttons are down (CoreGraphics on Mac, `GetAsyncKeyState` on Windows), and only while Excel is the front application. Some antivirus tools dislike workbooks that declare those calls.
+- On Windows they play the game's sound effects through the system's own wave player (`PlaySound` in `winmm`), from memory.
 - They do not use the network and do not write files. The optional macro `PlayDoomWithStats` writes one performance report to a text file in your home folder.
 
 All of the VBA is generated from the sources in this repository.
@@ -63,7 +69,7 @@ All of the VBA is generated from the sources in this repository.
 
 Correctness is checked frame by frame against the same WebAssembly module running under wasmtime, both in a small offline emulator of the generated VBA (`vbaemu.py`) and inside Excel itself (`Host.Verify`).
 
-Measurements, dead ends and the things Excel does that cost hours are in [docs/LAB-NOTES.md](docs/LAB-NOTES.md).
+A short account of the method, for anyone thinking of using it for something else, is in [docs/TECHNICAL-OVERVIEW.md](docs/TECHNICAL-OVERVIEW.md). Measurements, dead ends and the things Excel does that cost hours are in [docs/LAB-NOTES.md](docs/LAB-NOTES.md).
 
 ## Build from source
 
@@ -73,7 +79,7 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 .venv/bin/python mkdoom.py verify     # Mac only: also runs the in-Excel self-check
 ```
 
-A prebuilt engine (`work/doomxl.wasm`) is checked in, so only Python is needed. To rebuild the engine itself install [zig](https://ziglang.org/) and run `./build_xl.sh`.
+A prebuilt engine (`work/doomxl.wasm`) is checked in, so only Python is needed. To rebuild the engine itself install [zig](https://ziglang.org/) and run `./build_xl.sh` (on Windows: from Git Bash, with `zig` on the `PATH`). The checked-in engine was built with zig 0.17.1.
 
 | File | Purpose |
 |---|---|
@@ -82,6 +88,9 @@ A prebuilt engine (`work/doomxl.wasm`) is checked in, so only Python is needed. 
 | `rtvba.py` | Hand-written VBA runtime: memory helpers, 64-bit maths, file calls |
 | `hostvba.py`, `televba.py` | Excel side: display, keyboard, mouse, main loop, telemetry |
 | `frameart.py`, `mkxlsm.py`, `mkdoom.py` | Frame artwork, workbook writer, build script |
+| `frontsheets.py` | The cheat sheet and the checklist (the scoreboard) |
+| `win/verify.ps1`, `win/playtest.py`, `win/clicktest.ps1` | Windows test drivers: self-check, scripted play with injected keys, first-time-player path with real mouse clicks |
+| `tests/check_verify.py`, `tests/picture_check.py` | Compare the self-check's checksums, and the cells with the engine's frame |
 | `vbaemu.py`, `emu_run.py`, `ref.py` | Offline VBA emulator and reference comparison |
 | `xl.py`, `playtest.py`, `latency.py`, `freezetest.py`, `turntest.py`, `clicktest.py` | Mac test drivers (AppleScript and injected input) |
 | `experiments/` | Earlier measurements and prototypes, kept for the record; not maintained |

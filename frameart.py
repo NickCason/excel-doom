@@ -97,19 +97,19 @@ def compose():
     c.draw('BRDR_TL', GX - 8, GY - 8); c.draw('BRDR_TR', GX + 320, GY - 8)
     c.draw('BRDR_BL', GX - 8, GY + 200); c.draw('BRDR_BR', GX + 320, GY + 200)
     grey = c.grey_map()
-    def entries(x0, y, items):
+    def entries(x0, y, items, step=21):
         for keys, action in items:
             c.text(keys, x0, y, grey)
             c.text(action, x0 + 8, y + 9)
-            y += 21
+            y += step
         return y
     lw = GX - 16
     c.draw('M_DOOM', 4 + (lw - 123) // 2, 8)
     y = entries(10, 62, [('W   UP', 'FORWARD'), ('S   DOWN', 'BACK'), ('LEFT  RIGHT', 'TURN'), ('MOUSE', 'TURN'),
                          ('A   D', 'STRAFE'), ('SHIFT', 'RUN'), ('TAB', 'MAP')])
     rx = GX + 320 + 18
-    y = entries(rx, 10, [('CTRL   CLICK', 'FIRE'), ('SPACE   E', 'OPEN DOORS'), ('1 - 7', 'WEAPONS'), ('ESC', 'MENU'),
-                         ('ENTER', 'SELECT'), ('M', 'MOUSE ON OFF'), ('Q', 'QUIT')])
+    y = entries(rx, 8, [('CTRL   CLICK', 'FIRE'), ('SPACE   E', 'OPEN DOORS'), ('1 - 7', 'WEAPONS'), ('ESC', 'MENU'),
+                        ('ENTER', 'SELECT'), ('M', 'MOUSE ON OFF'), ('V', 'SOUND ON OFF'), ('8  9  0', 'CHEATS'), ('Q', 'QUIT')], step=19)
     c.text('TO START', rx, y + 6, grey)
     c.text('CLICK HERE', rx + 8, y + 15)
     widths = {s: c.text_width(s) for s in ('CTRL   CLICK', 'LEFT  RIGHT', 'MOUSE ON OFF', 'OPEN DOORS', 'CLICK HERE')}
@@ -130,7 +130,38 @@ def panels(scale=4):
         p = p.resize((p.width * scale, p.height * scale), Image.NEAREST)
         b = io.BytesIO(); p.save(b, 'PNG', optimize=True); out[name] = b.getvalue()
     title = [row[GX:GX + 320] for row in g[GY:GY + 200]]
+    bg, bw, bh = banner()
+    bx = (320 - bw) // 2
+    for y in range(bh):
+        title[BANNER_Y + y][bx:bx + bw] = bg[y]
     return title, pal, out
+
+def banner(big='CLICK TO PLAY', small='EVERY CELL IS A PIXEL'):
+    """The sign shown over the game picture whenever no game is running. It is not a picture
+    object (one more picture on the sheet halves the frame rate on Windows): it is drawn into
+    the cells, at build time over the title screen and by the host over the last frame.
+    One line in the HUD font at double size, one at normal size in grey.
+    -> (rows of palette indices, width, height) in game pixels."""
+    wad = Wad(); c = Canvas(wad)
+    w = max(2 * c.text_width(big), c.text_width(small)) + 28
+    w += w & 1
+    h = 46
+    c.tile('FLOOR7_2', 6)
+    c.shade(3, 3, w - 3, h - 3, 20)
+    x = (w - 2 * c.text_width(big)) // 2
+    for ch in big.upper():
+        nm = 'STCFN%03d' % ord(ch)
+        if ch == ' ' or not wad.has(nm):
+            x += 8; continue
+        pw, _, _, _, px = wad.patch(nm)
+        for (dx, dy), v in px.items():
+            for k in range(4):
+                c.put(x + 2 * dx + (k & 1), 8 + 2 * dy + (k >> 1), v)
+        x += 2 * pw
+    c.text(small, (w - c.text_width(small)) // 2, 31, c.grey_map())
+    return [row[:w] for row in c.g[:h]], w, h
+
+BANNER_Y = 118      # game pixel row of the banner's top edge; it is centred sideways
 
 if __name__ == '__main__':
     from PIL import Image

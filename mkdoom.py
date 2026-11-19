@@ -1,6 +1,6 @@
 """Build doom.xlsm: translated engine + runtime + host as VBA, shareware WAD as cell values."""
 import os, sys, struct, time, re, pickle
-import mkxlsm, w2v, rtvba, hostvba, vbalint, frameart, televba
+import mkxlsm, w2v, rtvba, hostvba, vbalint, frameart, televba, frontsheets
 
 WADC = 701
 WADR = 300      # first sheet row (0-based) holding WAD data: below the game, so game rows stay light
@@ -11,7 +11,8 @@ cgeventsourcekeystate getasynckeystate nothing step boolean me psn byte getfront
 getforegroundwindow hwnd activecell row column top playing evtcount pointapi getcursorpos setcursorpos getsystemmetrics
 x y double iif ev cgeventsourcecounterforeventtype rgb smallscroll len clear visiblerange rows columns count window each in object shapes visible entirerow hidden address mid string entirecolumn windowstate xlnormal xlmaximized skipfills displayformulabar mach_absolute_time queryperformancecounter queryperformancefrequency
 vblf vbcr replace right erase now telepath freefile open output print close environ version operatingsystem int bad nohi cgeventsourcebuttonstate cgeventcreate cgeventgetlocation cfrelease cgwarpmousecursorposition
-cgassociatemouseandmousecursorposition cgmaindisplayid cgdisplaypixelswide cgdisplaypixelshigh usablewidth usableheight width height displayheadings left msgbox longptr type hi lo byref'''.split())
+cgassociatemouseandmousecursorposition cgmaindisplayid cgdisplaypixelswide cgdisplaypixelshigh usablewidth usableheight width height displayheadings left msgbox longptr type hi lo byref
+playsoundmem playsoundstop xlsheetvisible activate textframe characters text saved chrw asc hex'''.split())
 
 SHEET_CODE = '''Private Sub Worksheet_BeforeDoubleClick(ByVal Target As Range, Cancel As Boolean)
     If Playing Then
@@ -25,6 +26,14 @@ Private Sub Worksheet_BeforeRightClick(ByVal Target As Range, Cancel As Boolean)
         EvtCount = EvtCount + 1
     End If
 End Sub
+Private Sub Worksheet_SelectionChange(ByVal Target As Range)
+    CellClick Target.Row, Target.Column
+End Sub
+'''
+
+BOOK_CODE = '''Private Sub Workbook_Open()
+    Splash
+End Sub
 '''
 
 def wad_sheet(path='vendor/wad/doom1.wad'):
@@ -35,7 +44,7 @@ def wad_sheet(path='vendor/wad/doom1.wad'):
     GXu, GYu = frameart.GX, frameart.GY
     used = sorted(set(v for row in title for v in row))
     sid = {v: i + 1 for i, v in enumerate(used)}
-    styles = mkxlsm.styles_xml([pal[v] for v in used] + [(0, 0, 0)])
+    styles = mkxlsm.styles_xml([pal[v] for v in used] + [(0, 0, 0)], extra=frontsheets.STYLES)
     black = len(used) + 1
     gcols = [mkxlsm.col_name(i + 2) for i in range(320)]
     wad = open(path, 'rb').read()
@@ -46,28 +55,42 @@ def wad_sheet(path='vendor/wad/doom1.wad'):
     meta = '<c r="%s%d"><v>%d</v></c><c r="%s%d"><v>%d</v></c>' % (mkxlsm.col_name(WADC - 2), WADR + 1, len(wad), mkxlsm.col_name(WADC - 1), WADR + 1, nrows)
     out = ['<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" '
            'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheetPr codeName="Sheet1"/>'
-           '<sheetViews><sheetView showGridLines="0" showRowColHeaders="0" zoomScale="100" workbookViewId="0"><selection activeCell="A1" sqref="A1"/></sheetView></sheetViews>'
+           # 50 %: the whole frame is on screen even on a small laptop before any macro has run (Splash then fits it properly)
+           '<sheetViews><sheetView showGridLines="0" showRowColHeaders="0" tabSelected="1" zoomScale="50" workbookViewId="0"><selection activeCell="A1" sqref="A1"/></sheetView></sheetViews>'
            '<sheetFormatPr defaultRowHeight="3" customHeight="1"/>'
            '<cols><col min="1" max="1" width="%.6f" customWidth="1" style="%d"/><col min="2" max="321" width="0.571429" customWidth="1"/>'
            '<col min="322" max="322" width="%.6f" customWidth="1" style="%d"/><col min="323" max="%d" width="40" customWidth="1" style="%d"/></cols><sheetData>'
            % (GXu * 4 / 7.99, black, GXu * 4 / 7.99, black, WADC - 10, black)]
-    big = {1: GYu * 3, 202: GYu * 3, 203: 409, 204: 409}
+    # rows 203 and 204 carry the two lines about allowing macros, then black down past the window's edge
+    big = {1: GYu * 3, 202: GYu * 3, 203: 30, 204: 30, 205: 409, 206: 409}
+    hints = dict(zip((203, 204), frontsheets.HINTS))
     for r in range(WADR + nrows):
         attrs = ' ht="%d" customHeight="1" s="%d" customFormat="1"' % (big[r + 1], black) if (r + 1) in big else (' ht="3" customHeight="1"' if 1 <= r <= 200 else '')
         fr = ''
         if 1 <= r <= 200:
             g = title[r - 1]
             fr = ''.join('<c r="%s%d" s="%d"/>' % (gcols[x], r + 1, sid[g[x]]) for x in range(320))
+        elif (r + 1) in hints:
+            fr = '<c r="B%d" s="%d" t="inlineStr"><is><t>%s</t></is></c>' % (r + 1, black + 1 + frontsheets.HINT_STYLE, hints[r + 1])
         wr = r - WADR
         row = words[wr * 16:wr * 16 + 16] if 0 <= wr < nrows else ()
-        if not row and r > 204:
+        if not row and r > 205:
             continue
         cells = ''.join('<c r="%s%d"><v>%d</v></c>' % (cols[i], r + 1, v) for i, v in enumerate(row) if v)
         out.append('<row r="%d"%s>%s%s%s</row>' % (r + 1, attrs, fr, meta if r == WADR else '', cells))
     out.append('</sheetData><drawing r:id="rId1"/></worksheet>')
-    pictures = [('Left', pngs['left'], 0, 0, 1, 202), ('Right', pngs['right'], 321, 0, 322, 202, 'PlayDoom'),
-                ('Top', pngs['top'], 1, 0, 321, 1), ('Bottom', pngs['bottom'], 1, 201, 321, 202)]
-    return ''.join(out), styles, pictures
+    # every piece of the frame starts a game when clicked (and so cannot be selected and dragged by accident)
+    pictures = [('Left', pngs['left'], 0, 0, 1, 202, 'PlayDoom'), ('Right', pngs['right'], 321, 0, 322, 202, 'PlayDoom'),
+                ('Top', pngs['top'], 1, 0, 321, 1, 'PlayDoom'), ('Bottom', pngs['bottom'], 1, 201, 321, 202, 'PlayDoom')]
+    return ''.join(out), styles, pictures, black + 1
+
+def banner_vba():
+    """The click-to-play banner for the host: its place in the game picture, and its pixels as
+    one hex string per row (the title screen in the cells already has it, from frameart.panels)."""
+    g, bw, bh = frameart.banner()
+    consts = dict(BANX=(320 - bw) // 2, BANY=frameart.BANNER_Y, BANW=bw, BANH=bh)
+    rows = '\n'.join('    r(%d) = "%s"' % (y, ''.join('%02X' % v for v in row)) for y, row in enumerate(g))
+    return consts, rows
 
 def build(out='out/doom.xlsm', wasm_path='work/doomxl.wasm'):
     os.makedirs(os.path.dirname(out) or '.', exist_ok=True)
@@ -75,7 +98,15 @@ def build(out='out/doom.xlsm', wasm_path='work/doomxl.wasm'):
     T = w2v.Translator(wasm_path)
     mods, stats = T.build()
     build_id = time.strftime('%Y-%m-%d %H:%M:%S')
-    mods += [('Rt', rtvba.RT), ('RtF', rtvba.RTF), ('Wasi', rtvba.WASI), ('Tele', televba.TELE), ('Host', hostvba.HOST.replace('@@BUILD@@', build_id))]
+    host = hostvba.HOST.replace('@@BUILD@@', build_id)
+    consts, rows = banner_vba()
+    # colour tolerance on Windows: lowest and highest while moving, and at rest (see RunDoom).
+    # DOOM_TOL=lo,hi,settle overrides it for experiments; 8,24,8 is the Mac behaviour.
+    consts['TOLLO'], consts['TOLHI'], consts['TOLSETTLE'] = (int(v) for v in os.environ.get('DOOM_TOL', '8,16,0').split(','))
+    for name, value in consts.items():
+        host = host.replace('@@%s@@' % name, str(value))
+    host = host.replace("    '@@BANNERROWS@@", rows)
+    mods += [('Rt', rtvba.RT), ('RtF', rtvba.RTF), ('Wasi', rtvba.WASI), ('Tele', televba.TELE), ('Host', host)]
     host_src = re.sub(r'(?m)^#.*$', '', hostvba.HOST)
     host_src = re.sub(r'(?m)^Private Declare .*$', '', host_src)
     host_src = re.sub(r'(?s)Private Type \w+.*?End Type', '', host_src)
@@ -86,8 +117,10 @@ def build(out='out/doom.xlsm', wasm_path='work/doomxl.wasm'):
         for p in pr[:12]: print('LINT', p)
         raise SystemExit(1)
     longest = max(len(l) for _, s in mods for l in s.split('\n'))
-    sheet, styles, pictures = wad_sheet()
-    vba = mkxlsm.build_xlsm(out, mods, sheet_xml=sheet, styles=styles, sheet_code=SHEET_CODE, pictures=pictures)
+    sheet, styles, pictures, extra_base = wad_sheet()
+    # the workbook opens on the game sheet: the title screen in cells with the click-to-play sign over it
+    vba = mkxlsm.build_xlsm(out, mods, sheet_xml=sheet, styles=styles, sheet_code=SHEET_CODE, pictures=pictures,
+                            sheet_name='DOOM', extra_sheets=frontsheets.build(extra_base), workbook_code=BOOK_CODE)
     print('built %s: %.1f MB, %d modules, %d VBA lines, longest line %d chars, vbaProject %.1f MB, %.1fs'
           % (out, os.path.getsize(out) / 1e6, len(mods), sum(s.count('\n') for _, s in mods), longest, len(vba) / 1e6, time.time() - t))
 

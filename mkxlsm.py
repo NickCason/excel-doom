@@ -310,12 +310,15 @@ Attribute VB_TemplateDerived = False
 Attribute VB_Customizable = True
 '''
 
-def build_vba_project(std_modules, sheet_code=''):
-    """std_modules: list of (name, source_without_attribute_header)."""
+def build_vba_project(std_modules, sheet_code='', extra_sheets=0, workbook_code=''):
+    """std_modules: list of (name, source_without_attribute_header). Every worksheet needs a
+    document module; extra_sheets adds empty ones named Sheet2, Sheet3, ..."""
     modules = [
-        ('ThisWorkbook', 'doc', DOC_ATTRS % ('ThisWorkbook', '00020819-0000-0000-C000-000000000046')),
+        ('ThisWorkbook', 'doc', DOC_ATTRS % ('ThisWorkbook', '00020819-0000-0000-C000-000000000046') + workbook_code),
         ('Sheet1', 'doc', DOC_ATTRS % ('Sheet1', '00020820-0000-0000-C000-000000000046') + sheet_code),
     ]
+    for k in range(extra_sheets):
+        modules.append(('Sheet%d' % (k + 2), 'doc', DOC_ATTRS % ('Sheet%d' % (k + 2), '00020820-0000-0000-C000-000000000046')))
     for name, src in std_modules:
         modules.append((name, 'std', 'Attribute VB_Name = "%s"\n%s' % (name, src)))
     pid = '{9E3A6A6B-4F0C-4E4E-9C0B-5B1E7D2A6C11}'
@@ -364,18 +367,64 @@ def sheet_with_values(rows):
     out.append('</sheetData></worksheet>')
     return ''.join(out)
 
-def styles_xml(colours):
-    """colours: list of (r, g, b). Cell style id k+1 is a solid fill of colours[k]."""
+def styles_xml(colours, extra=None):
+    """colours: list of (r, g, b). Cell style id k+1 is a solid fill of colours[k].
+    extra: more cell styles for ordinary sheets, each a dict with any of
+      font=(size, bold, italic, 'RRGGBB'), fill='RRGGBB', border='RRGGBB' (thin, all sides),
+      align='horizontal' or 'horizontal,vertical', wrap=True.
+    They get the style ids that follow the colours: len(colours) + 1 + position."""
+    extra = extra or []
     fills = ''.join('<fill><patternFill patternType="solid"><fgColor rgb="FF%02X%02X%02X"/><bgColor indexed="64"/></patternFill></fill>' % c for c in colours)
     xfs = ''.join('<xf numFmtId="0" fontId="0" fillId="%d" borderId="0" xfId="0" applyFill="1"/>' % (i + 2) for i in range(len(colours)))
+    fonts, borders, efills = ['<font><sz val="11"/><name val="Calibri"/></font>'], ['<border><left/><right/><top/><bottom/><diagonal/></border>'], []
+    def index(items, xml):
+        if xml not in items: items.append(xml)
+        return items.index(xml)
+    for st in extra:
+        fi = bi = 0; fl = 0
+        if 'font' in st:
+            sz, bold, ital, rgb = st['font']
+            fi = index(fonts, '<font>%s%s<sz val="%s"/><color rgb="FF%s"/><name val="Calibri"/></font>' % ('<b/>' if bold else '', '<i/>' if ital else '', sz, rgb))
+        if 'fill' in st:
+            fl = len(colours) + 2 + index(efills, '<fill><patternFill patternType="solid"><fgColor rgb="FF%s"/><bgColor indexed="64"/></patternFill></fill>' % st['fill'])
+        if 'border' in st:
+            side = '<%%s style="thin"><color rgb="FF%s"/></%%s>' % st['border']
+            bi = index(borders, '<border>' + ''.join(side % (s, s) for s in ('left', 'right', 'top', 'bottom')) + '<diagonal/></border>')
+        al = ''
+        if 'align' in st or st.get('wrap'):
+            h, _, v = st.get('align', '').partition(',')
+            al = '<alignment%s%s%s/>' % (' horizontal="%s"' % h if h else '', ' vertical="%s"' % v if v else '', ' wrapText="1"' if st.get('wrap') else '')
+        xfs += ('<xf numFmtId="0" fontId="%d" fillId="%d" borderId="%d" xfId="0" applyFont="1" applyFill="1" applyBorder="1"%s>%s</xf>'
+                % (fi, fl, bi, ' applyAlignment="1"' if al else '', al)) if al else \
+               '<xf numFmtId="0" fontId="%d" fillId="%d" borderId="%d" xfId="0" applyFont="1" applyFill="1" applyBorder="1"/>' % (fi, fl, bi)
     return ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
-            '<fonts count="1"><font><sz val="11"/><name val="Calibri"/></font></fonts>'
-            '<fills count="%d"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill>%s</fills>'
-            '<borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders>'
+            '<fonts count="%d">%s</fonts>'
+            '<fills count="%d"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill>%s%s</fills>'
+            '<borders count="%d">%s</borders>'
             '<cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>'
             '<cellXfs count="%d"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>%s</cellXfs>'
             '<cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles></styleSheet>'
-            % (len(colours) + 2, fills, len(colours) + 1, xfs))
+            % (len(fonts), ''.join(fonts), len(colours) + 2 + len(efills), fills, ''.join(efills), len(borders), ''.join(borders),
+               len(colours) + 1 + len(extra), xfs))
+
+def text_shape(name, c0, r0, c1, r1, text, macro=None, size=11, rgb='000000', font='Calibri', shape_id=2):
+    """One anchor for drawing_doc: a borderless text box over the given cells (0-based corners).
+    Its fill is fully transparent rather than absent, so the whole box takes the click."""
+    return ('<xdr:twoCellAnchor editAs="twoCell"><xdr:from><xdr:col>%d</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>%d</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from>'
+            '<xdr:to><xdr:col>%d</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>%d</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:to>'
+            '<xdr:sp%s textlink=""><xdr:nvSpPr><xdr:cNvPr id="%d" name="%s"/><xdr:cNvSpPr/></xdr:nvSpPr>'
+            '<xdr:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="952500" cy="190500"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom>'
+            '<a:solidFill><a:srgbClr val="FFFFFF"><a:alpha val="0"/></a:srgbClr></a:solidFill><a:ln><a:noFill/></a:ln></xdr:spPr>'
+            '<xdr:txBody><a:bodyPr vertOverflow="clip" horzOverflow="clip" wrap="none" lIns="0" tIns="0" rIns="0" bIns="0" rtlCol="0" anchor="ctr"/><a:lstStyle/>'
+            '<a:p><a:pPr algn="ctr"/><a:r><a:rPr lang="en-US" sz="%d"><a:solidFill><a:srgbClr val="%s"/></a:solidFill>'
+            '<a:latin typeface="%s"/><a:ea typeface="%s"/><a:cs typeface="%s"/></a:rPr><a:t>%s</a:t></a:r></a:p></xdr:txBody></xdr:sp>'
+            '<xdr:clientData/></xdr:twoCellAnchor>'
+            % (c0, r0, c1, r1, ' macro="[0]!%s"' % macro if macro else '', shape_id, name, size * 100, rgb, font, font, font, text))
+
+def drawing_doc(anchors):
+    return ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" '
+            'xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">'
+            + ''.join(anchors) + '</xdr:wsDr>')
 
 def drawing_xml(pics):
     """pics: list of (name, from_col, from_row, to_col, to_row), 0-based cell corners."""
@@ -393,18 +442,41 @@ def drawing_xml(pics):
     out.append('</xdr:wsDr>')
     return ''.join(out)
 
-def build_xlsm(path, std_modules, sheet_xml=None, styles=None, sheet_code='', pictures=None):
-    """pictures: list of (name, png_bytes, from_col, from_row, to_col, to_row)."""
-    vba = build_vba_project(std_modules, sheet_code)
+def build_xlsm(path, std_modules, sheet_xml=None, styles=None, sheet_code='', pictures=None,
+               sheet_name='Sheet1', sheet_hidden=False, extra_sheets=None, active_tab=0, workbook_code=''):
+    """pictures: list of (name, png_bytes, from_col, from_row, to_col, to_row) on the first sheet.
+    extra_sheets: list of (tab name, sheet xml, drawing xml or None[, hidden]). Sheet k of them must carry
+    codeName Sheet<k+2> and, if it has a drawing, <drawing r:id="rId1"/>. active_tab is 0-based."""
+    extra_sheets = extra_sheets or []
+    vba = build_vba_project(std_modules, sheet_code, len(extra_sheets), workbook_code)
     ct, wb, wbrels = CT, WB, WBRELS
+    wb = wb.replace('<sheet name="Sheet1" sheetId="1" r:id="rId1"/>',
+                    '<sheet name="%s" sheetId="1"%s r:id="rId1"/>' % (sheet_name, ' state="hidden"' if sheet_hidden else '')
+                    + ''.join('<sheet name="%s" sheetId="%d"%s r:id="rId%d"/>' % (sh[0], k + 2, ' state="hidden"' if len(sh) > 3 and sh[3] else '', k + 10)
+                              for k, sh in enumerate(extra_sheets)))
+    extra_sheets = [tuple(sh[:3]) for sh in extra_sheets]
+    for k, (_, _, dr) in enumerate(extra_sheets):
+        ct = ct.replace('</Types>', '<Override PartName="/xl/worksheets/sheet%d.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/></Types>' % (k + 2))
+        if dr:
+            ct = ct.replace('</Types>', '<Override PartName="/xl/drawings/drawing%d.xml" ContentType="application/vnd.openxmlformats-officedocument.drawing+xml"/></Types>' % (k + 2))
+        wbrels = wbrels.replace('</Relationships>', '<Relationship Id="rId%d" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet%d.xml"/></Relationships>' % (k + 10, k + 2))
+    view = '<bookViews><workbookView%s/></bookViews>' % (' firstSheet="%d" activeTab="%d"' % (active_tab, active_tab) if active_tab else '')
+    if extra_sheets and not styles:
+        wb = wb.replace('<sheets>', view + '<sheets>')
     if pictures:
         ct = ct.replace('<Default Extension="bin"', '<Default Extension="png" ContentType="image/png"/><Default Extension="bin"')
         ct = ct.replace('</Types>', '<Override PartName="/xl/drawings/drawing1.xml" ContentType="application/vnd.openxmlformats-officedocument.drawing+xml"/></Types>')
     if styles:
         ct = ct.replace('</Types>', '<Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/></Types>')
         wbrels = wbrels.replace('</Relationships>', '<Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>')
-        wb = wb.replace('<sheets>', '<bookViews><workbookView/></bookViews><sheets>')
+        wb = wb.replace('<sheets>', view + '<sheets>')
     with zipfile.ZipFile(path, 'w', zipfile.ZIP_DEFLATED) as z:
+        for k, (_, xml, dr) in enumerate(extra_sheets):
+            z.writestr('xl/worksheets/sheet%d.xml' % (k + 2), xml)
+            if dr:
+                z.writestr('xl/drawings/drawing%d.xml' % (k + 2), dr)
+                z.writestr('xl/worksheets/_rels/sheet%d.xml.rels' % (k + 2), '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+                           '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing" Target="../drawings/drawing%d.xml"/></Relationships>' % (k + 2))
         z.writestr('[Content_Types].xml', ct)
         z.writestr('_rels/.rels', RELS)
         z.writestr('xl/workbook.xml', wb)
